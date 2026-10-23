@@ -31,19 +31,59 @@ def main() -> int:
         sys.stderr.write("usage: extract_cm_diff.py <cm-fix-output.log>\n")
         return 0
     with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
-        lines = fh.read().splitlines()
+        raw_lines = fh.read().splitlines()
+
+    # Strip runner log timestamps if present while preserving diff whitespace
+    lines = [
+        re.sub(r"^\d{4}-\d\d-\d\dT[0-9:.]+Z ", "", l) if re.match(r"^\d{4}-\d\d-\d\dT[0-9:.]+Z ", l) else l
+        for l in raw_lines
+    ]
+
+    # Collect candidate diff blocks. cm fix outputs a terminal UI preview first
+    # (with line numbers), followed by the standard git unified diff without line numbers.
+    candidates: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if STOP.match(line):
+            if current:
+                candidates.append(current)
+                current = []
+            continue
+        if DIFF_START.match(line):
+            if current:
+                candidates.append(current)
+                current = []
+            current.append(line)
+            continue
+        if current:
+            current.append(line)
+    if current:
+        candidates.append(current)
+
+    # Filter out blocks that contain line numbers (e.g., ' 31: ' or '-34: ')
+    clean_candidates = []
+    for block in candidates:
+        has_hunk = any(l.startswith("@@") for l in block)
+        has_lineno = any(re.search(r"^\s*\d+:", l) or re.search(r"^[+-]\s*\d+:", l) for l in block)
+        if has_hunk and not has_lineno:
+            clean_candidates.append(block)
+
+    chosen = clean_candidates[-1] if clean_candidates else (candidates[-1] if candidates else [])
 
     out: list[str] = []
-    capturing = False
-    for line in lines:
-        if not capturing:
-            if DIFF_START.match(line):
-                capturing = True
-                out.append(line)
-            continue
-        if STOP.match(line) or not is_diff_line(line):
+    for line in chosen:
+        if STOP.match(line):
             break
-        out.append(line)
+        m = re.match(r"^([ +-])\s*\d+:\s?(.*)$", line)
+        if m:
+            out.append(f"{m.group(1)}{m.group(2)}")
+        elif re.match(r"^\s*\d+:\s?(.*)$", line):
+            m2 = re.match(r"^\s*\d+:\s?(.*)$", line)
+            out.append(f" {m2.group(1)}")
+        elif is_diff_line(line):
+            out.append(line)
+        else:
+            break
 
     # Trim trailing blank lines that aren't real context.
     while out and out[-1] == "":

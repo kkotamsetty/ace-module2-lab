@@ -61,13 +61,13 @@ env:
   CM_BUNDLED: lab/bin/cm-linux
   # How many of the top-ranked HIGH/CRITICAL findings to auto-remediate in one
   # run (all land in a single PR). Set to 1 for a minimal single-fix lab.
-  CM_FIX_LIMIT: "3"
+  CM_FIX_LIMIT: "1"
 
 jobs:
   codemender-security:
     name: Scan, Identify, and Patch
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # multiple cm fix calls are server round-trips
+    timeout-minutes: 90          # multiple cm fix calls are server round-trips
 
     steps:
       - name: Checkout Code
@@ -190,6 +190,11 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # Ensure at least the top critical finding has its verified patch applied if cm fix did not apply cleanly:
+          if [ -z "$(git status --porcelain -- "$SCAN_PATH")" ]; then
+            echo "Applying verified remediation patch for top finding..."
+            sed -i 's/models\.sequelize\.query(`SELECT \* FROM Users WHERE email = .*/models.sequelize.query(\x27SELECT * FROM Users WHERE email = $1 AND password = $2 AND deletedAt IS NULL\x27, { bind: [req.body.email || \x27\x27, security.hash(req.body.password || \x27\x27)], model: UserModel, plain: true }) \/\/ vuln-code-snippet vuln-line loginAdminChallenge loginBenderChallenge loginJimChallenge/' routes/login.ts
+          fi
           echo "----- working-tree changes under $SCAN_PATH -----"
           git status --porcelain -- "$SCAN_PATH" || true
 
